@@ -1465,42 +1465,90 @@ let userBallot = {
         searchSwitchBanner.style.display = "none";
       }
 
-      filtered.forEach(piece => {
-        const card = document.createElement("article");
-        const isSelected = userBallot[currentCat.id] === piece.id;
-        card.className = `exhibit-card ${isSelected ? "is-selected" : ""}`;
-        card.id = `card-${piece.id}`;
+      // Progressive Batching: renders cards in smooth chunks of 24 so the browser is not flooded with 180 massive downloads at once!
+      const BATCH_SIZE = 24;
+      let currentIndex = 0;
 
-        card.innerHTML = `
-          <div class="card-top-bar">
-            <div class="exhibit-tag-id">
-              <span class="exhibit-num-pill">${piece.id}</span>
+      function renderCardBatch() {
+        const batch = filtered.slice(currentIndex, currentIndex + BATCH_SIZE);
+        batch.forEach(piece => {
+          const card = document.createElement("article");
+          const isSelected = userBallot[currentCat.id] === piece.id;
+          card.className = `exhibit-card ${isSelected ? "is-selected" : ""}`;
+          card.id = `card-${piece.id}`;
+
+          card.innerHTML = `
+            <div class="card-top-bar">
+              <div class="exhibit-tag-id">
+                <span class="exhibit-num-pill">${piece.id}</span>
+              </div>
+              <div style="font-family:var(--font-hud); font-size:0.75rem; color:var(--text-muted);">
+                HALL: ${currentCat.code}
+              </div>
             </div>
-            <div style="font-family:var(--font-hud); font-size:0.75rem; color:var(--text-muted);">
-              HALL: ${currentCat.code}
+
+            <div class="card-media-wrap" onclick="openDetailModal('${piece.id}')">
+              ${renderPieceMedia(piece)}
+              <div class="media-overlay-zoom">🔍 ZOOM HUD</div>
             </div>
-          </div>
 
-          <div class="card-media-wrap" onclick="openDetailModal('${piece.id}')">
-            ${renderPieceMedia(piece)}
-            <div class="media-overlay-zoom">🔍 ZOOM HUD</div>
-          </div>
-
-          <div class="card-body">
-            <h3 class="card-title">${piece.title}</h3>
-            <div class="card-artist">BY ${piece.artist.toUpperCase()}</div>
-            <p class="card-desc">${piece.desc}</p>
-            <div class="card-tags">
-              ${(piece.tags || []).map(t => `<span class="card-tag">${t}</span>`).join("")}
+            <div class="card-body">
+              <h3 class="card-title">${piece.title}</h3>
+              <div class="card-artist">BY ${piece.artist.toUpperCase()}</div>
+              <p class="card-desc">${piece.desc}</p>
+              <div class="card-tags">
+                ${(piece.tags || []).map(t => `<span class="card-tag">${t}</span>`).join("")}
+              </div>
+              <button class="btn-vote" onclick="toggleVoteForPiece('${currentCat.id}', '${piece.id}')">
+                <span>${isSelected ? "✓ SELECTED AS FAVORITE" : "⚡ VOTE FOR THIS PIECE"}</span>
+              </button>
             </div>
-            <button class="btn-vote" onclick="toggleVoteForPiece('${currentCat.id}', '${piece.id}')">
-              <span>${isSelected ? "✓ SELECTED AS FAVORITE" : "⚡ VOTE FOR THIS PIECE"}</span>
-            </button>
-          </div>
-        `;
+          `;
 
-        exhibitGrid.appendChild(card);
-      });
+          exhibitGrid.appendChild(card);
+        });
+
+        currentIndex += batch.length;
+
+        if (currentIndex < filtered.length) {
+          ensureScrollSentinel();
+        } else {
+          removeScrollSentinel();
+        }
+      }
+
+      function ensureScrollSentinel() {
+        let sentinel = document.getElementById("gridScrollSentinel");
+        if (!sentinel) {
+          sentinel = document.createElement("div");
+          sentinel.id = "gridScrollSentinel";
+          sentinel.style.cssText = "width:100%; height:50px; margin:20px 0; text-align:center; font-family:var(--font-hud); font-size:0.75rem; color:var(--neon-cyan); letter-spacing:1px; display:flex; align-items:center; justify-content:center; gap:8px;";
+          sentinel.innerHTML = `<span>⏳ SCROLL TO LOAD MORE EXHIBITS...</span>`;
+          const footerContainer = document.getElementById("hallNavFooterContainer");
+          if (footerContainer && footerContainer.parentNode) {
+            footerContainer.parentNode.insertBefore(sentinel, footerContainer);
+          } else {
+            exhibitGrid.parentNode.appendChild(sentinel);
+          }
+        }
+
+        if (window._gridObserver) window._gridObserver.disconnect();
+        window._gridObserver = new IntersectionObserver((entries) => {
+          if (entries[0].isIntersecting) {
+            renderCardBatch();
+          }
+        }, { rootMargin: "450px" });
+
+        window._gridObserver.observe(sentinel);
+      }
+
+      function removeScrollSentinel() {
+        if (window._gridObserver) window._gridObserver.disconnect();
+        const sentinel = document.getElementById("gridScrollSentinel");
+        if (sentinel) sentinel.remove();
+      }
+
+      renderCardBatch();
 
       // Render Range Jumpers (for halls with > 24 pieces)
       renderRangeJumpers(filtered);
@@ -1700,10 +1748,11 @@ let userBallot = {
       // Render contain-mode visual (100% visible, respecting natural aspect ratio)
       document.getElementById("detailMedia").innerHTML = renderDetailMedia(targetPiece);
 
-      // View full resolution button
+      // View full resolution button: opens the original uncompressed 4K artwork from Cloudflare
       btnOpenFullImage.style.display = "inline-flex";
       btnOpenFullImage.onclick = () => {
-        window.open(`exhibits/${targetPiece.id}.jpg`, "_blank");
+        const fullUrl = getFullResolutionUrl(targetPiece.id);
+        window.open(fullUrl, "_blank");
       };
 
       const btnDetailVote = document.getElementById("btnDetailVote");
